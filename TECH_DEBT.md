@@ -1,0 +1,4 @@
+# Tech debt
+
+- **Slots RPC per request while no calendar copy exists.** With no good copy (first deploy, or the Clock failing), every slots request awaits a `refreshCalendar` RPC to the Clock. Concurrent calls share one refresh inside the Clock, but each request still costs a DO request. Fix: remember a recent failed attempt (e.g. `fetched_at` within a minute) and answer "paused" without calling the Clock.
+- **Reschedule limit counts failed attempts.** The 3-a-day counter is incremented before the rules, busy and clash checks, so a visitor who picks taken times uses up their moves. Fix: count only successful reschedules (increment inside the reschedule batch, or decrement on refusal).

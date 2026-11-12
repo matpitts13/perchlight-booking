@@ -147,3 +147,34 @@ describe("review fixes", () => {
     expect(r.ok).toBe(false);
   });
 });
+
+describe("an unfinished calendar refresh", () => {
+  beforeEach(resetAll);
+  it("leaves an error you can see, and past 24 hours without a good copy you're told once", async () => {
+    const { sources, UNFINISHED } = await import("../src/lib/busy.js");
+    let hang = false;
+    mockFetch({ feeds: { [URL1]: () => { if (hang) throw new Error("killed"); return ics(["UID:a", "DTSTART:20260303T100000Z", "DURATION:PT1H"]); } } });
+    const app = appFor({ CALENDAR_ICS_URLS: URL1 });
+    await refreshAll(app, NOW);
+    const key = (await sources(app)).list[0].key;
+    expect((await rows("SELECT error FROM busy_cache WHERE source = ?1", key))[0].error).toBeNull();
+    // Simulate a run killed right after its claim: only the claim's writes happen.
+    const { fetchFeed } = await import("../src/lib/busy.js");
+    hang = true;
+    const t = NOW + 25 * HOUR;
+    await env.DB.batch([]).catch(() => null);
+    const vi = (await import("vitest")).vi;
+    vi.spyOn(globalThis, "fetch").mockImplementation(() => new Promise(() => {})); // never finishes
+    const run = refreshAll(appFor({ CALENDAR_ICS_URLS: URL1 }), t);
+    await new Promise((r) => setTimeout(r, 50));
+    expect((await rows("SELECT error FROM busy_cache WHERE source = ?1", key))[0].error).toBe(UNFINISHED);
+    expect(await rows("SELECT kind FROM deliveries WHERE booking_id = ''")).toEqual([]); // one unfinished run isn't an outage yet
+    const run2 = refreshAll(appFor({ CALENDAR_ICS_URLS: URL1 }), t + 2 * MIN); // a second one that doesn't finish either
+    await new Promise((r) => setTimeout(r, 50));
+    expect(await rows("SELECT kind FROM deliveries WHERE booking_id = ''")).toEqual([{ kind: "owner_paused" }]);
+    void run2;
+    expect((await api("GET", "config", undefined, { CALENDAR_ICS_URLS: URL1 })).data.calendar.sources[0].error).toBe(UNFINISHED);
+    void run;
+    void fetchFeed;
+  });
+});

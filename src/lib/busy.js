@@ -25,6 +25,7 @@ export const HOLD_MAX_AGE_MS = 30 * MIN;
 export const STALE_LIMIT_MS = 24 * 3600_000;
 export const REPARSE_MS = 12 * 3600_000;
 const FETCH_TIMEOUT_MS = 10_000;
+export const UNFINISHED = "calendar refresh did not finish (possibly the CPU limit)";
 
 export async function sources(app) {
   const { urls, problems } = calendarUrls(app.env);
@@ -123,10 +124,19 @@ export async function refresh(app, s, row, now = Date.now(), { force = false, ho
   if (!spend(app.budget, COST.feedFetch + 1)) return { skipped: "budget" };
   try {
     await env.DB.prepare("INSERT OR IGNORE INTO busy_cache (source, kind) VALUES (?1, ?2)").bind(s.key, s.kind).run();
-    const claim = await env.DB.prepare("UPDATE busy_cache SET fetched_at = ?2 WHERE source = ?1 AND fetched_at <= ?3")
-      .bind(s.key, now, force ? now : now - MIN)
-      .run();
-    if (claim.meta.changes !== 1) return { skipped: "just refreshed" };
+    // The error is written up front and cleared on success: a run killed by
+    // the CPU limit (or one that throws) leaves it, so you can see it, and past
+    // 24 hours without a good copy the usual "bookings paused" email goes out.
+    const [, claim] = await env.DB.batch([
+      // The previous run didn't finish either, and there's no usable copy: tell you (once per outage).
+      env.DB.prepare(
+        `INSERT OR IGNORE INTO deliveries (id, booking_id, kind, sequence, due_ms, next_attempt_at, created_ms)
+         SELECT 'dl_' || lower(hex(randomblob(8))), '', 'owner_paused', ok_at / 60000, ?2, ?2, ?2 FROM busy_cache
+         WHERE source = ?1 AND error = ?4 AND fetched_at <= ?2 - 60000 AND (ok_at = 0 OR ?2 - ok_at > ?3)`,
+      ).bind(s.key, now, STALE_LIMIT_MS, UNFINISHED),
+      env.DB.prepare("UPDATE busy_cache SET fetched_at = ?2, ok = 0, error = ?4 WHERE source = ?1 AND fetched_at <= ?3")
+        .bind(s.key, now, force ? now : now - MIN, UNFINISHED),
+    ]);    if (claim.meta.changes !== 1) return { skipped: "just refreshed" };
   } catch (err) {
     console.error(`calendar refresh claim: ${err instanceof Error ? err.message : String(err)}`);
     return { skipped: "d1" };
