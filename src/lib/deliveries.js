@@ -10,12 +10,13 @@ import { buildEmail } from "./notify.js";
 import { hmacHex } from "./crypto.js";
 import { sqlTime, utcDay } from "./http.js";
 import { spend, left, COST } from "./budget.js";
-import { loadBooking } from "./bookings.js";
+import { loadBooking, visitorEmailsOn } from "./bookings.js";
 
 export const BACKOFF_MINUTES = [1, 5, 30, 120, 720];
 export const WINDOW_MS = 24 * 3600_000;
 export const STALE_MS = 2 * 60_000;
-const VISITOR_FIRST = new Set(["visitor_confirm", "visitor_verify", "visitor_request"]);
+// Visitor emails a stranger could trigger again and again count toward the per-address cap.
+const VISITOR_FIRST = new Set(["visitor_confirm", "visitor_verify", "visitor_request", "visitor_change"]);
 
 const errText = (err) => (err instanceof Error ? err.message : String(err));
 
@@ -89,6 +90,7 @@ async function attempt(app, d, b, now) {
   if ("skip" in email) return { status: "skipped", error: email.skip };
   if (email.toVisitor) {
     if (app.cfg.visitorEmail === "none") return { status: "skipped", error: 'visitorEmail is "none"' };
+    if (b && !visitorEmailsOn(app.cfg, b)) return { status: "skipped", error: "sent only for bookings that passed Turnstile" };
     const got = visitorSender(app.env);
     if ("error" in got) return { status: "config", error: got.error };
     if (!spend(app.budget, COST.visitorCaps)) return { status: "retry", error: "out of budget this run" };

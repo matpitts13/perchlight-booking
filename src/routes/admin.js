@@ -8,7 +8,7 @@ import { loadBooking, cancel, approve, setLocation, hold, confirm } from "../lib
 import { checkDetails, isEmail, oneLine } from "../lib/validate.js";
 import { ruleProblem, dayStarts } from "../lib/slots.js";
 import { windowData, parseRangesJson } from "../lib/store.js";
-import { readBusy, sources, fetchFeed, refresh } from "../lib/busy.js";
+import { readBusy, sources, askClock } from "../lib/busy.js";
 import { parseRanges } from "../lib/config.js";
 import { deliverBooking, deliver } from "../lib/deliveries.js";
 import { runHousekeeping, scheduleNext, ANONYMISE } from "../lib/housekeeping.js";
@@ -111,6 +111,7 @@ async function getConfig(app) {
     calendar: {
       links: busy.list.length,
       paused: busy.paused,
+      problems: busy.problems,
       sources: busy.list.map((s) => {
         const r = busy.rows.get(s.key);
         return { kind: s.kind, lastGood: r?.ok_at ? new Date(r.ok_at).toISOString() : null, lastTry: r?.fetched_at ? new Date(r.fetched_at).toISOString() : null, error: r?.error ?? null };
@@ -130,6 +131,7 @@ function setupWarnings(app) {
   if (cfg.visitorEmail !== "none" && providerName(env) === "cloudflare-routing") w.push(`visitorEmail is "${cfg.visitorEmail}" but MAIL_PROVIDER is cloudflare-routing, which can't reach visitors.`);
   if (cfg.visitorEmail !== "none" && !env.TURNSTILE_SECRET_KEY) w.push("Visitor emails are only sent for bookings that passed Turnstile: set TURNSTILE_SECRET_KEY.");
   if (!env.CALENDAR_ICS_URLS) w.push("CALENDAR_ICS_URLS isn't set: your calendar's busy times aren't checked.");
+  if (!String(env.PUBLIC_URL ?? "").trim()) w.push("PUBLIC_URL isn't set: links and invite UIDs use the address each request came in on.");
   if (!env.FEED_SECRET) w.push("FEED_SECRET isn't set: the bookings feed is off.");
   return w;
 }
@@ -217,7 +219,8 @@ async function bookOnBehalf(request, app, ctx) {
   if (!Number.isFinite(startMs) || !/Z$|[+-]\d{2}:\d{2}$/.test(String(body.start))) return fail(422, "start must be a UTC time (ISO 8601).");
   const now = app.now();
   const ex = (await windowData(app, startMs - DAY, startMs + DAY, now)).exceptions;
-  const rule = body.ignoreRules === true ? null : ruleProblem(cfg, type, startMs, now, ex);
+  // Even outside your hours, a start must sit on the cell grid (cells are what prevent double booking).
+  const rule = body.ignoreRules === true ? (startMs % (type.cell * 60_000) ? "That start isn't on the slot grid." : null) : ruleProblem(cfg, type, startMs, now, ex);
   if (rule) return fail(422, `${rule} (send "ignoreRules": true to book outside your hours anyway)`);
   const d = checkDetails(cfg, type, body);
   if (!d.ok) return fail(422, "Check the fields.", { errors: d.errors });
@@ -262,37 +265,29 @@ async function deleteRow(env, table, col, value) {
   return json({ ok: true, deleted: r.meta.changes });
 }
 
-/** Fetches every ICS link now and reports (the busy cache is updated too). */
+/** Has the Clock fetch every ICS link now and reports (the busy cache is updated too). */
 async function calendarCheck(app) {
   const now = app.now();
-  const list = await sources(app);
-  if (!list.length) return json({ ok: true, links: 0, note: "No CALENDAR_ICS_URLS set: only bookings made here block time." });
-  const { results } = await app.env.DB.prepare("SELECT * FROM busy_cache").all();
-  const rows = new Map(results.map((r) => [r.source, r]));
-  const out = [];
-  for (const s of list) {
-    const t0 = Date.now();
-    const r = await fetchFeed(app, s, null, now);
-    const ms = Date.now() - t0;
-    await refresh(app, s, rows.get(s.key), now, { force: true });
-    const week = (r.intervals ?? []).filter(([a]) => a * 60_000 < now + 7 * DAY).slice(0, 100).map(([a, b]) => ({ start: new Date(a * 60_000).toISOString(), end: new Date(b * 60_000).toISOString() }));
-    out.push({
-      kind: s.kind,
-      ok: r.ok,
-      error: r.error ?? null,
-      bytes: r.stats?.bytes ?? null,
-      eventsRead: r.stats?.events ?? null,
-      repeatingSeries: r.stats?.series ?? null,
-      movedInstances: r.stats?.overrides ?? null,
-      unsupportedRules: r.stats?.unsupported ?? [],
-      unknownTimeZones: r.stats?.unknownZones ?? [],
-      busyNext7Days: week,
-      wallMs: ms,
-    });
-  }
-  return json({ ok: true, links: list.length, results: out, note: "wallMs includes the network wait; Workers count CPU time only." });
+  const { list, problems } = await sources(app);
+  if (!list.length && !problems.length) return json({ ok: true, links: 0, note: "No CALENDAR_ICS_URLS set: only bookings made here block time." });
+  if (problems.length) return json({ ok: false, links: list.length, problems, note: "Bookings are paused until CALENDAR_ICS_URLS is fixed." });
+  if (!app.env.CLOCK) return fail(503, "The CLOCK Durable Object binding is missing from wrangler.jsonc; it reads the calendar.");
+  const r = await askClock(app, true);
+  if (!r) return fail(503, "The Clock couldn't be reached; try again in a minute.");
+  const out = r.results.map((x) => ({
+    kind: x.kind,
+    ok: Boolean(x.ok),
+    error: x.error ?? x.skipped ?? null,
+    bytes: x.stats?.bytes ?? null,
+    eventsRead: x.stats?.events ?? null,
+    repeatingSeries: x.stats?.series ?? null,
+    movedInstances: x.stats?.overrides ?? null,
+    unsupportedRules: x.stats?.unsupported ?? [],
+    unknownTimeZones: x.stats?.unknownZones ?? [],
+    busyNext7Days: (x.intervals ?? []).filter(([a]) => a * 60_000 < now + 7 * DAY).slice(0, 100).map(([a, b]) => ({ start: new Date(a * 60_000).toISOString(), end: new Date(b * 60_000).toISOString() })),
+  }));
+  return json({ ok: true, links: list.length, results: out, note: `Feeds over FEED_MAX_KB (${settings(app.env).feedMaxKb} KB) pause bookings; parsing runs in the Clock Durable Object.` });
 }
-
 async function retryDelivery(app, id) {
   const r = await app.env.DB.prepare(
     `UPDATE deliveries SET status = 'pending', next_attempt_at = ?2, due_ms = ?2, attempts = 0, last_error = NULL

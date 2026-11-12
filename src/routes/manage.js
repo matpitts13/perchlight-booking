@@ -21,6 +21,7 @@ import { layout, problemPage, timeRadios } from "./pages.js";
 import { slotsFor, PAUSED } from "./public.js";
 
 const MIN = 60_000;
+export const RESCHEDULES_PER_DAY = 3;
 const DAY = 86_400_000;
 const BAD_LINK = () => html(problemPage("This link doesn't work", "It isn't valid, or it has expired."), 404);
 const LIVE = new Set(["confirmed", "requested", "cancel_requested", "approve_requested", "decline_requested"]);
@@ -136,6 +137,12 @@ export async function manageRoutes(request, app, ctx, path) {
       if (!type || !type.on) return answer("This booking type can't be changed online any more.", 422);
       if (!["confirmed", "requested"].includes(b.status) || b.start_ms <= now) return answer("This booking can't be moved.", 409);
       if (!post) return reschedulePage(app, ctx, b, type, token, request);
+      // A link holder could move a booking back and forth to flood both inboxes: 3 moves a day per booking.
+      const moves = await app.env.DB.prepare(
+        `INSERT INTO rate_counters (key, hour, count) VALUES (?1, ?2, 1)
+         ON CONFLICT (key, hour) DO UPDATE SET count = count + 1 RETURNING count`,
+      ).bind(`resched:${b.id}`, `${new Date(now).toISOString().slice(0, 10)}T00`).first();
+      if ((moves?.count ?? 0) > RESCHEDULES_PER_DAY) return answer(`This booking has been moved ${RESCHEDULES_PER_DAY} times today. Please try again tomorrow, or cancel it.`, 429);
       const startMs = Number(body.start);
       const ex = (await windowData(app, startMs - DAY, startMs + DAY, now)).exceptions;
       const rule = Number.isFinite(startMs) ? ruleProblem(app.cfg, type, startMs, now, ex) : "Please pick one of the times.";

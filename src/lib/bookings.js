@@ -38,8 +38,9 @@ function randomHex(bytes = 16) {
   return [...crypto.getRandomValues(new Uint8Array(bytes))].map((b) => b.toString(16).padStart(2, "0")).join("");
 }
 
-/** Expires holds and requests whose time ran out: counts, cells, notices, status. */
-export function expireStatements(db, now) {
+/** Expires holds and requests whose time ran out: counts, cells, notices, status.
+ *  visitorEmail: the config's mode (visitor notices only where visitorEmailsOn would allow). */
+export function expireStatements(db, now, visitorEmail = "none") {
   return [
     db.prepare(
       `UPDATE day_counts SET n = MAX(0, n - (SELECT COUNT(*) FROM bookings b WHERE b.local_day = day_counts.local_day
@@ -52,14 +53,19 @@ export function expireStatements(db, now) {
       `INSERT OR IGNORE INTO deliveries (id, booking_id, kind, sequence, due_ms, next_attempt_at, created_ms)
        SELECT 'dl_' || lower(hex(randomblob(8))), b.id, k.kind, b.sequence + 1, ?1, ?1, ?1
        FROM bookings b, (SELECT 'owner_expired' AS kind UNION ALL SELECT 'visitor_cancel') k
-       WHERE b.status = 'requested' AND b.request_expires_at <= ?1`,
-    ).bind(now),
+       WHERE b.status = 'requested' AND b.request_expires_at <= ?1
+         AND (k.kind = 'owner_expired' OR (?2 = 1 AND (b.turnstile = 'passed' OR b.via = 'owner')))`,
+    ).bind(now, visitorEmail === "none" ? 0 : 1),
     db.prepare(
       `UPDATE bookings SET
          sequence = sequence + CASE WHEN status = 'requested' THEN 1 ELSE 0 END,
          cancelled_by = 'system', cancelled_at = ?2,
          cancel_reason = CASE WHEN status = 'requested' THEN 'the request wasn''t approved in time' ELSE 'the hold ran out' END,
-         status = 'expired', hold_token_hash = NULL, net_hash = NULL
+         status = 'expired', hold_token_hash = NULL, net_hash = NULL,
+         -- A hold never confirmed (e.g. confirm-your-email not clicked): drop what they typed now.
+         name = CASE WHEN status = 'held' THEN NULL ELSE name END, email = CASE WHEN status = 'held' THEN NULL ELSE email END,
+         phone = CASE WHEN status = 'held' THEN NULL ELSE phone END, notes = CASE WHEN status = 'held' THEN NULL ELSE notes END,
+         visitor_tz = CASE WHEN status = 'held' THEN NULL ELSE visitor_tz END
        WHERE ${EXPIRED()}`,
     ).bind(now, sqlTime(now)),
   ];
@@ -167,17 +173,17 @@ export async function hold(app, { type, startMs, now, netHash = null, turnstile 
   const end = startMs + type.minutes * MIN;
   const expires = now + type.holdMinutes * MIN;
   const stmts = [
-    ...expireStatements(db, now),
+    ...expireStatements(db, now, cfg.visitorEmail),
     db.prepare(
       `INSERT INTO bookings (id, type_id, start_ms, end_ms, claim_end_ms, local_day, start_at, status, hold_expires_at,
-         hold_token_hash, net_hash, turnstile, via, created_at, created_ms, op)
-       SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, 'held', ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15
+         hold_token_hash, net_hash, turnstile, via, created_at, created_ms, op, uid_host)
+       SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, 'held', ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?18
        WHERE (SELECT COUNT(*) FROM bookings WHERE status = 'held' AND hold_expires_at > ?14) < ?16
          AND (?10 IS NULL OR (SELECT COUNT(*) FROM bookings WHERE status = 'held' AND hold_expires_at > ?14 AND net_hash = ?10) < ?17)`,
     ).bind(
       id, type.id, startMs, end, end + type.bufferAfter * MIN, day, sqlTime(startMs), expires,
       await sha256Hex(token), netHash, turnstile, via, sqlTime(now), now, nonce,
-      maxActive ?? NO_CAP, maxPerNetwork ?? NO_CAP,
+      maxActive ?? NO_CAP, maxPerNetwork ?? NO_CAP, app.host,
     ),
     claimCells(db, id, nonce, cellsFor(type, startMs)),
     countUp(db, id, nonce, day, type.id, type.dailyCap),
@@ -265,7 +271,7 @@ export async function verifyEmail(app, b, type, now) {
     db.prepare(
       `UPDATE bookings SET status = ?3, verify_pending = 0, hold_expires_at = NULL, hold_token_hash = NULL, net_hash = NULL,
          confirmed_at = ?4, request_expires_at = ?5, op = ?2
-       WHERE id = ?1 AND status = 'held' AND verify_pending = 1 AND hold_expires_at > ?6`,
+       WHERE id = ?1 AND status = 'held' AND verify_pending = 1 AND hold_expires_at > ?6 AND start_ms > ?6`,
     ).bind(b.id, nonce, status, status === "confirmed" ? sqlTime(now) : null, requestExpires, now),
     ...plan.map((p) => deliveryStmt(db, b.id, nonce, p, now)),
   ];
@@ -351,7 +357,7 @@ export async function reschedule(app, b, type, startMs, now) {
   const moved = { ...b, start_ms: startMs, end_ms: end };
   const plan = deliveryPlan(cfg, type, moved, "changed", seq, now);
   const stmts = [
-    ...expireStatements(db, now),
+    ...expireStatements(db, now, cfg.visitorEmail),
     db.prepare(
       `UPDATE bookings SET op = ?2 WHERE id = ?1 AND status IN ('confirmed', 'requested') AND sequence = ?3
          AND EXISTS (SELECT 1 FROM slot_cells WHERE booking_id = ?1)`,

@@ -80,7 +80,7 @@ export async function runHousekeeping(app, { now = app.now(), force = false, fro
   }
   const result = { ran: true, appRequests: 0, retention: null, deliveries: null };
   try {
-    await env.DB.batch([...releaseStaleStatements(env.DB, now), ...expireStatements(env.DB, now)]);
+    await env.DB.batch([...releaseStaleStatements(env.DB, now), ...expireStatements(env.DB, now, app.cfg.visitorEmail)]);
     const state = Object.fromEntries(
       (await env.DB.prepare("SELECT key, value FROM state WHERE key IN ('last_retention', 'retention_errors')").all()).results.map((r) => [r.key, r.value]),
     );

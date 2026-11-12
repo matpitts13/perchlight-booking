@@ -189,9 +189,9 @@ describe("owner approval", () => {
     await runHousekeeping(app, { now: NOW + 48 * HOUR + MIN, force: true });
     expect((await rows("SELECT status, sequence FROM bookings"))[0]).toEqual({ status: "expired", sequence: 1 });
     expect(await rows("SELECT COUNT(*) AS n FROM slot_cells")).toEqual([{ n: 0 }]);
+    // No visitor email is even queued with "visitorEmail": "none".
     expect((await rows("SELECT kind, status, last_error FROM deliveries WHERE kind IN ('owner_expired', 'visitor_cancel') ORDER BY kind"))).toEqual([
       { kind: "owner_expired", status: "sent", last_error: null },
-      { kind: "visitor_cancel", status: "skipped", last_error: 'visitorEmail is "none"' },
     ]);
     // The approve link still opens, but approving is refused.
     expect((await postForm(`/r/${id}/approve`, { t: tokenOf(url) })).status).toBe(404); // link expired with the request

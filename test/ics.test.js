@@ -153,8 +153,8 @@ describe("ICS parsing", () => {
       const text = ics(["UID:h", "DTSTART:20260115T090000Z", "DURATION:PT30M", `RRULE:${rule}`]);
       const r = parseIcs(text, { ownerZone: "Europe/London", now, until: now + 10 * DAY });
       expect(r.stats.unsupported[0].rule).toBe(rule);
-      expect(r.intervals.length).toBeGreaterThanOrEqual(10); // every day at 09:00 for the window
-      expect(r.intervals.every(([a, b]) => formatTime(a * MIN, "UTC") === "09:00" && b - a === 30)).toBe(true);
+      // Whole days from now to the horizon: it could be at any hour.
+      expect(r.intervals).toEqual([[now / MIN, (now + 10 * DAY) / MIN]]);
     }
     expect(parseRule("FREQ=SECONDLY").unsupported).toMatch(/SECONDLY/);
   });
@@ -164,7 +164,7 @@ describe("ICS parsing", () => {
     const text = ics(["UID:c", "DTSTART:20000101T090000Z", "DURATION:PT1H", "RRULE:FREQ=DAILY;COUNT=20000"]);
     const r = parseIcs(text, { ownerZone: "Europe/London", now, until: now + 5 * DAY });
     expect(r.stats.unsupported[0].reason).toMatch(/more than 5000/);
-    expect(r.intervals.length).toBeGreaterThanOrEqual(5);
+    expect(r.intervals).toEqual([[now / MIN, (now + 5 * DAY) / MIN]]);
   });
 
   it("a Google-style export: weekly series with an excluded date and a moved instance, all-day events, our own invite ignored", () => {

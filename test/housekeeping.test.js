@@ -271,7 +271,7 @@ describe("your calendar's busy times", () => {
     expect(h.status).toBe(409);
     // The unsupported hourly rule over-blocks and is reported.
     const check = await api("GET", "calendar-check", undefined, e);
-    expect(check.data.results[0].unsupportedRules[0]).toMatchObject({ rule: "FREQ=HOURLY", treatedAs: "busy every day at that time" });
+    expect(check.data.results[0].unsupportedRules[0]).toMatchObject({ rule: "FREQ=HOURLY", treatedAs: "busy all day, every day, from its start to the horizon or UNTIL" });
     expect(JSON.stringify(check.data)).not.toContain("cal.test"); // the link is a secret
   });
 

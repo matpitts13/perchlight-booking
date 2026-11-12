@@ -63,6 +63,7 @@ export function makeWorker(raw) {
         }
         const f = /^\/feed\/([^/]+)\.ics$/.exec(path);
         if (f && request.method === "GET") return await feed(request, app, f[1]);
+        if (path.startsWith("/feed/")) return text("Not found\n", 404);
         if (path === "/tick") {
           // For an uptime monitor: lets a quiet deployment catch up (throttled).
           maybeHousekeep(app, ctx);
@@ -70,7 +71,8 @@ export function makeWorker(raw) {
         }
         return env.ASSETS ? env.ASSETS.fetch(request) : text("Not found\n", 404);
       } catch (err) {
-        console.error(`${request.method} ${path}: ${err instanceof Error ? err.stack : String(err)}`);
+        // The feed path is a secret: never logged.
+        console.error(`${request.method} ${path.replace(/^\/feed\/.*/, "/feed/[secret].ics")}: ${err instanceof Error ? err.stack : String(err)}`);
         const contact = settings(env).fallbackContact;
         return path.startsWith("/api/")
           ? json({ ok: false, error: `Booking isn't possible right now.${contact ? ` Please contact ${contact}.` : ""}` }, 500)

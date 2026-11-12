@@ -61,7 +61,7 @@ export function vevent(o) {
   const b = o.booking;
   const out = [
     "BEGIN:VEVENT",
-    `UID:${b.id}@${o.host}`,
+    `UID:${b.id}@${b.uid_host || o.host}`, // fixed when booked, so a later CANCEL matches
     `SEQUENCE:${b.sequence}`,
     `DTSTAMP:${icsTime(o.stamp)}`,
     `DTSTART:${icsTime(b.start_ms)}`,

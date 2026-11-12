@@ -3,7 +3,7 @@ import { vi } from "vitest";
 import { makeWorker, makeApp, clock } from "../src/app.js";
 import { resetLocalThrottle } from "../src/lib/housekeeping.js";
 import { resetBlocked } from "../src/lib/ratelimit.js";
-import { resetRefreshing } from "../src/lib/busy.js";
+import { resetRefreshing, refreshAll } from "../src/lib/busy.js";
 import { TEST_CONFIG, PROVIDER_CONFIG, CONFIRM_CONFIG } from "./config.js";
 
 export const ORIGIN = "https://booking.test";
@@ -24,16 +24,26 @@ export const RESEND = { MAIL_PROVIDER: "resend", RESEND_API_KEY: "re_test_key" }
 // A stand-in for the Clock Durable Object: records wake() calls. The real one
 // is only used by the Clock tests (its alarm would fire on real time).
 export const clockCalls = [];
-export const fakeClock = {
-  idFromName: () => "clock",
-  get: () => ({
-    wake: async (at) => {
-      clockCalls.push(at);
-      return at;
-    },
-    getNext: async () => (clockCalls.length ? Math.min(...clockCalls) : null),
-  }),
-};
+export const refreshCalls = [];
+/** A fake Clock bound to one env: wake() is recorded; refreshCalendar() runs the real refresh in-process. */
+export function fakeClockFor(getEnv) {
+  return {
+    idFromName: () => "clock",
+    get: () => ({
+      wake: async (at) => {
+        clockCalls.push(at);
+        return at;
+      },
+      getNext: async () => (clockCalls.length ? Math.min(...clockCalls) : null),
+      refreshCalendar: async (origin, force = false) => {
+        refreshCalls.push({ origin, force });
+        const app = makeApp(TEST_CONFIG, getEnv(), { origin });
+        return refreshAll(app, app.now(), { force });
+      },
+    }),
+  };
+}
+export const fakeClock = fakeClockFor(() => ({ ...env, CLOCK: fakeClock }));
 
 export function setNow(ms) {
   clock.now = () => ms;
@@ -100,7 +110,9 @@ export function mockFetch(opts = {}) {
 export async function call(path, init = {}, envOverrides = {}, which = "none") {
   resetLocalThrottle();
   const ctx = createExecutionContext();
-  const res = await workers[which].fetch(new Request(`${ORIGIN}${path}`, init), { ...env, CLOCK: fakeClock, ...envOverrides }, ctx);
+  const e = { ...env, ...envOverrides };
+  if (!("CLOCK" in envOverrides)) e.CLOCK = fakeClockFor(() => e);
+  const res = await workers[which].fetch(new Request(`${ORIGIN}${path}`, init), e, ctx);
   await waitOnExecutionContext(ctx);
   return res;
 }
@@ -148,7 +160,9 @@ export async function api(method, path, body, envOverrides = {}, token = TOKEN) 
 
 /** The app object the libraries take, for calling them directly. */
 export function appFor(envOverrides = {}, config = TEST_CONFIG) {
-  const app = makeApp(config, { ...env, CLOCK: fakeClock, ...envOverrides }, { origin: ORIGIN });
+  const e = { ...env, ...envOverrides };
+  if (!("CLOCK" in envOverrides)) e.CLOCK = fakeClockFor(() => e);
+  const app = makeApp(config, e, { origin: ORIGIN });
   return app;
 }
 
@@ -173,6 +187,7 @@ export async function resetAll() {
   resetRefreshing();
   setNow(NOW);
   clockCalls.length = 0;
+  refreshCalls.length = 0;
   await env.DB.batch(
     ["slot_cells", "deliveries", "bookings", "day_counts", "exceptions", "busy_cache", "blocked", "email_counts", "rate_counters", "daily_counts"].map((t) => env.DB.prepare(`DELETE FROM ${t}`)),
   );

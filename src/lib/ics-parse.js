@@ -56,9 +56,12 @@ export function parseDt(value, params = {}) {
   const m = /^(\d{4})(\d{2})(\d{2})(?:T(\d{2})(\d{2})(\d{2})(Z)?)?$/.exec(String(value).trim());
   if (!m) return null;
   const date = !m[4] || params.VALUE === "DATE";
+  // Impossible dates and times (20270230, 25:00) are refused, not guessed.
+  const [y, mo, d, h, mi, s] = [+m[1], +m[2], +m[3], +(m[4] ?? 0), +(m[5] ?? 0), +(m[6] ?? 0)];
+  if (mo < 1 || mo > 12 || d < 1 || d > new Date(Date.UTC(y, mo, 0)).getUTCDate() || h > 23 || mi > 59 || s > 60) return null;
   return {
     y: +m[1], mo: +m[2], d: +m[3],
-    h: date ? 0 : +m[4], mi: date ? 0 : +m[5], s: date ? 0 : +m[6],
+    h: date ? 0 : +m[4], mi: date ? 0 : +m[5], s: date ? 0 : Math.min(+m[6], 59),
     utc: Boolean(m[7]), date, tzid: params.TZID ?? null,
   };
 }
@@ -286,7 +289,8 @@ export function expandDays(r, start, stopDay, winDay, isPastUntil) {
  */
 export function parseIcs(text, o) {
   const { ownerZone, now, until } = o;
-  const uidSuffix = o.uidSuffix ? o.uidSuffix.toLowerCase() : null;
+  // Our own booking invites (accepted into your calendar) are ignored: UID "bk_<16>@<a host we used>".
+  const ownHosts = new Set((o.ownHosts ?? (o.uidSuffix ? [o.uidSuffix.replace(/^@/, "")] : [])).map((h) => String(h).toLowerCase()));
   const stats = { bytes: text.length, events: 0, series: 0, skippedPast: 0, overrides: 0, unsupported: [], unknownZones: [], vtimezones: 0 };
   const masters = [];
   const overrides = new Map(); // uid -> [{ rid, ev }]
@@ -372,7 +376,8 @@ export function parseIcs(text, o) {
   function finishEvent(e) {
     stats.events++;
     const uid = e.UID ? e.UID.value.trim() : "";
-    if (uidSuffix && uid.toLowerCase().endsWith(uidSuffix)) return; // our own booking, accepted into your calendar
+    const own = /^bk_[a-km-z2-9]{16}@(.+)$/.exec(uid.toLowerCase());
+    if (own && ownHosts.has(own[1])) return;
     if (!e.DTSTART) return;
     if (e["RECURRENCE-ID"]) {
       stats.overrides++;
@@ -400,7 +405,7 @@ export function parseIcs(text, o) {
     const clean = tzid.replace(/^"|"$/g, "").trim();
     const tail = clean.split("/").slice(-2).join("/");
     if (isZone(clean)) z = { kind: "iana", zone: clean };
-    else if (WINDOWS_ZONES[clean]) z = { kind: "iana", zone: WINDOWS_ZONES[clean] };
+    else if (Object.hasOwn(WINDOWS_ZONES, clean)) z = { kind: "iana", zone: WINDOWS_ZONES[clean] };
     else if (vtz.has(tzid)) {
       z = { kind: "vtz", tz: vtz.get(tzid) };
       stats.vtimezones++;
@@ -429,7 +434,8 @@ export function parseIcs(text, o) {
   const isFree = (e) => {
     const st = e.STATUS?.value.trim().toUpperCase();
     const tr = e.TRANSP?.value.trim().toUpperCase();
-    return st === "CANCELLED" || tr === "TRANSPARENT";
+    // Holiday feeds mark holidays "free" (TRANSPARENT); there, every event blocks its day.
+    return st === "CANCELLED" || (tr === "TRANSPARENT" && !o.ignoreTransp);
   };
 
   for (const { uid, e } of masters) {
@@ -554,20 +560,19 @@ export function parseIcs(text, o) {
     }
   }
 
-  // An unsupported rule blocks its time of day, every day, from its start
-  // (or now) to the horizon, or to UNTIL if that's readable.
+  // A rule we can't expand exactly (HOURLY, BYHOUR lists, BYWEEKNO...) could
+  // put an instance at any time of day, so it blocks whole days (your zone)
+  // from its start to the horizon, or to UNTIL if that's readable: too much,
+  // never too little.
   function overBlock(rule, reason, start, zone, startMs, durMs, isPastUntil) {
-    if (stats.unsupported.length < 50) stats.unsupported.push({ rule: String(rule).slice(0, 200), reason, treatedAs: "busy every day at that time" });
-    const dur = Math.max(durMs, start.date ? DAY : 15 * MIN);
-    const from = Math.max(dayNum(start.y, start.mo, start.d), Math.floor((now - dur) / DAY) - 1);
+    if (stats.unsupported.length < 50) stats.unsupported.push({ rule: String(rule).slice(0, 200), reason, treatedAs: "busy all day, every day, from its start to the horizon or UNTIL" });
+    const from = Math.max(dayNum(start.y, start.mo, start.d), Math.floor(now / DAY) - 1);
     const to = Math.floor(until / DAY) + 1;
     for (let d = from; d <= to; d++) {
       if (isPastUntil(d)) break;
       const w = fromDay(d);
-      const dt = { ...start, y: w.y, mo: w.mo, d: w.d };
-      const s = start.date ? startOfDay(ownerZone, `${w.y}-${p2(w.mo)}-${p2(w.d)}`) : toUtc(dt, zone);
-      if (s + dur < startMs) continue;
-      add(s, s + dur);
+      const n2 = fromDay(d + 1);
+      add(startOfDay(ownerZone, `${w.y}-${p2(w.mo)}-${p2(w.d)}`), startOfDay(ownerZone, `${n2.y}-${p2(n2.mo)}-${p2(n2.d)}`));
     }
   }
 

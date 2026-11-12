@@ -38,6 +38,7 @@ CREATE TABLE bookings (
   via                TEXT NOT NULL DEFAULT 'page' CHECK (via IN ('page', 'nojs', 'owner')),
   sequence           INTEGER NOT NULL DEFAULT 0, -- the invite's SEQUENCE
   manage_version     INTEGER NOT NULL DEFAULT 1, -- bump to revoke every link to this booking
+  uid_host           TEXT,                       -- the host in the invite UID, fixed when booked
   op                 TEXT,                       -- nonce of the last guarded change (see src/lib/bookings.js)
   created_at         TEXT NOT NULL,
   created_ms         INTEGER NOT NULL,
@@ -90,7 +91,8 @@ CREATE TABLE busy_cache (
   source        TEXT PRIMARY KEY,
   kind          TEXT NOT NULL DEFAULT 'calendar' CHECK (kind IN ('calendar', 'holiday')),
   fetched_at    INTEGER NOT NULL DEFAULT 0, -- last attempt
-  ok_at         INTEGER NOT NULL DEFAULT 0, -- last good copy
+  ok_at         INTEGER NOT NULL DEFAULT 0, -- last good copy (a 304 counts)
+  parsed_at     INTEGER NOT NULL DEFAULT 0, -- last full parse (intervals reach this + the horizon)
   etag          TEXT,
   last_modified TEXT,
   ok            INTEGER NOT NULL DEFAULT 0,
