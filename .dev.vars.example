@@ -1,0 +1,28 @@
+# Copy to .dev.vars for local development (`npm run dev`). Never commit .dev.vars.
+# In production, set each one with:  npx wrangler secret put <NAME>
+
+# Required. 16+ random characters (openssl rand -hex 32). Protects /api/*.
+ADMIN_TOKEN=
+
+# Required. 16+ random characters. Signs cancel / reschedule / approve links.
+LINK_SECRET=
+
+# Required. 16+ random characters. Keys the rate limit's daily hash (no IPs are stored).
+IP_SALT=
+
+# Recommended. Your calendar's private ICS link(s), comma-separated. A secret.
+CALENDAR_ICS_URLS=
+
+# Optional. 16+ random characters: your bookings feed is /feed/<FEED_SECRET>.ics
+FEED_SECRET=
+
+# Recommended: Turnstile secret key (and TURNSTILE_SITE_KEY in wrangler.jsonc vars).
+# Cloudflare's test secret that always passes: 1x0000000000000000000000000000000AA
+TURNSTILE_SECRET_KEY=
+
+# --- Only for MAIL_PROVIDER other than cloudflare-routing (needed for visitor emails) ---
+# RESEND_API_KEY=
+# AWS_ACCESS_KEY_ID=
+# AWS_SECRET_ACCESS_KEY=
+# MAILGUN_API_KEY=
+# POSTMARK_SERVER_TOKEN=

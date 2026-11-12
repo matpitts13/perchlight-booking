@@ -1,0 +1,81 @@
+{
+  "$schema": "https://perchlight.ravenburst.com/schema/v1.json",
+  "version": 1,
+  "views": [
+    {
+      "id": "booking-upcoming",
+      "title": "Bookings",
+      "source": { "type": "d1", "database": "YOUR-D1-DATABASE-ID", "table": "bookings" },
+      "columns": [
+        { "label": "Starts (UTC)", "from": "start_at", "type": "date" },
+        { "label": "Type", "from": "type_id" },
+        { "label": "Status", "from": "status", "type": "enum", "options": ["held", "requested", "confirmed", "cancelled", "declined", "expired", "cancel_requested", "approve_requested", "decline_requested"] },
+        { "label": "Name", "from": "name" },
+        { "label": "Email", "from": "email" },
+        { "label": "Phone", "from": "phone" },
+        { "label": "Where", "from": "location_key" },
+        { "label": "Location detail", "from": "location_detail" },
+        { "label": "Notes", "from": "notes" },
+        { "label": "Their time zone", "from": "visitor_tz", "hidden": true },
+        { "label": "Cancelled by", "from": "cancelled_by", "hidden": true },
+        { "label": "Reason", "from": "cancel_reason", "hidden": true },
+        { "label": "Booked", "from": "created_at", "type": "date", "hidden": true },
+        { "label": "Id", "from": "id", "hidden": true }
+      ],
+      "actions": [
+        { "label": "Cancel", "confirm": true, "set": { "status": "cancel_requested" } },
+        { "label": "Approve request", "set": { "status": "approve_requested" } },
+        { "label": "Decline request", "confirm": true, "set": { "status": "decline_requested" } },
+        { "label": "Delete", "confirm": true, "delete": true }
+      ]
+    },
+    {
+      "id": "booking-days-off",
+      "title": "Days off and different hours",
+      "source": { "type": "d1", "database": "YOUR-D1-DATABASE-ID", "table": "exceptions" },
+      "columns": [
+        { "label": "Date (your zone)", "from": "date" },
+        { "label": "Kind", "from": "kind", "type": "enum", "options": ["off", "hours"], "editable": true },
+        { "label": "Hours (minutes of the day)", "from": "ranges", "type": "json", "editable": true },
+        { "label": "Note", "from": "note", "editable": true }
+      ],
+      "actions": [{ "label": "Delete", "confirm": true, "delete": true }]
+    },
+    {
+      "id": "booking-blocked",
+      "title": "Blocked addresses",
+      "source": { "type": "d1", "database": "YOUR-D1-DATABASE-ID", "table": "blocked" },
+      "columns": [
+        { "label": "Address or @domain", "from": "value" },
+        { "label": "Note", "from": "note", "editable": true },
+        { "label": "Added", "from": "created_at", "type": "date" }
+      ],
+      "actions": [{ "label": "Unblock", "confirm": true, "delete": true }]
+    },
+    {
+      "id": "booking-notifications",
+      "title": "Booking notifications",
+      "source": { "type": "d1", "database": "YOUR-D1-DATABASE-ID", "table": "deliveries" },
+      "columns": [
+        { "label": "Kind", "from": "kind" },
+        { "label": "Status", "from": "status", "type": "enum", "options": ["pending", "sending", "retry", "sent", "failed", "unknown", "skipped"] },
+        { "label": "Attempts", "from": "attempts", "type": "number" },
+        { "label": "Last error", "from": "last_error" },
+        { "label": "Sent", "from": "sent_at", "type": "date" },
+        { "label": "Booking", "from": "booking_id", "hidden": true }
+      ],
+      "actions": [{ "label": "Try again", "set": { "status": "pending", "next_attempt_at": 0, "attempts": 0 } }]
+    },
+    {
+      "id": "booking-days",
+      "title": "Bookings per day",
+      "source": { "type": "d1", "database": "YOUR-D1-DATABASE-ID", "table": "day_counts" },
+      "columns": [
+        { "label": "Day (your zone)", "from": "local_day", "type": "date" },
+        { "label": "Type", "from": "type_id" },
+        { "label": "Booked", "from": "n", "type": "count" },
+        { "label": "Cap", "from": "cap", "type": "number" }
+      ]
+    }
+  ]
+}

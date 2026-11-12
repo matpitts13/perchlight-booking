@@ -1,0 +1,79 @@
+// perchlight-booking: Worker + static pages + D1 + one Durable Object (Clock).
+// Secrets are never set here. Locally they go in .dev.vars (see .dev.vars.example);
+// in production: npx wrangler secret put <NAME>
+//
+// No cron trigger, on purpose: the free plan allows 5 per account and the
+// rest of the Perchlight family uses 4. Reminders and expiries are timed by
+// the Clock Durable Object's alarm, with lazy housekeeping on requests as
+// the fallback (see docs/SDD.md, "Reminders and housekeeping without cron").
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "perchlight-booking",
+  "main": "src/index.js",
+  "compatibility_date": "2026-11-01",
+
+  // The booking pages are static (free, unlimited asset requests); any path
+  // that isn't a file (e.g. /30min) gets index.html, which reads the type
+  // from the URL. The API, manage links, no-JS pages and feed run the Worker.
+  "assets": {
+    "directory": "./public",
+    "binding": "ASSETS",
+    "not_found_handling": "single-page-application",
+    "run_worker_first": ["/api/*", "/b/*", "/r/*", "/v/*", "/feed/*", "/nojs", "/nojs/*", "/tick"]
+  },
+
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "perchlight-booking",
+      "migrations_dir": "migrations"
+    }
+  ],
+
+  // Email to your own verified address (Email Routing > Destination
+  // addresses). Cloudflare: sending to verified destinations is free on all plans.
+  "send_email": [{ "name": "EMAIL" }],
+
+  // The Clock: one instance, holds only an alarm. Durable Objects on the
+  // Free plan need the SQLite storage backend (new_sqlite_classes).
+  "durable_objects": {
+    "bindings": [{ "name": "CLOCK", "class_name": "Clock" }]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Clock"] }],
+
+  "vars": {
+    // Your Worker's public URL, for links in emails, e.g. https://book.example.com
+    // (empty = the address the request came in on; the Clock remembers it).
+    "PUBLIC_URL": "",
+    // An address on a domain with Email Routing on. Notifications come from it.
+    "MAIL_FROM": "",
+    // cloudflare-routing (free, your verified address only) | resend | ses | mailgun | postmark | cloudflare
+    // Emails to visitors ("visitorEmail" in booking.json) need one of the email services.
+    "MAIL_PROVIDER": "cloudflare-routing",
+    // From address for visitor emails, if different (must be verified with the service).
+    "VISITOR_MAIL_FROM": "",
+    // Your calendar feed is re-read at most this often while people look at times.
+    "FEED_MINUTES": "10",
+    // Largest calendar feed read, in KB (bigger ones pause bookings with a clear message).
+    // 512: parsing ~500 KB measured ~3-4 ms of CPU warm in V8 (README, "What it costs").
+    "FEED_MAX_KB": "512",
+    // Personal details are removed this many days after the meeting. 0 = keep until deleted.
+    "RETENTION_DAYS": "90",
+    // Shown to visitors when booking isn't possible (e.g. "sam@example.com").
+    "FALLBACK_CONTACT": "",
+    // At most one lazy housekeeping run per this many minutes.
+    "HOUSEKEEPING_MINUTES": "5",
+    // Turnstile site key (public). Set TURNSTILE_SECRET_KEY as a secret too.
+    "TURNSTILE_SITE_KEY": "",
+
+    // Amazon SES
+    "AWS_REGION": "",
+    "SES_CONFIGURATION_SET": "",
+    // Mailgun: your sending domain, and "us" or "eu"
+    "MAILGUN_DOMAIN": "",
+    "MAILGUN_REGION": "us"
+  }
+
+  // Your own domain (for example book.example.com), once it works on workers.dev:
+  // "routes": [{ "pattern": "book.example.com", "custom_domain": true }]
+}

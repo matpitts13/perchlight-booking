@@ -1,0 +1,48 @@
+{
+  "owner": {
+    "name": "Sam Example",
+    "email": "sam@example.com",
+    "timeZone": "Europe/London",
+    "weekly": {
+      "mon": [["09:00", "12:00"], ["13:00", "17:00"]],
+      "tue": [["09:00", "17:00"]],
+      "wed": [],
+      "thu": [["09:00", "17:00"]],
+      "fri": [["09:00", "13:00"]],
+      "sat": [],
+      "sun": []
+    },
+    "holidays": ["2026-12-25", "2026-12-26"],
+    "holidayFeeds": [],
+    "dailyCap": 6
+  },
+  "defaults": {
+    "minNoticeHours": 4,
+    "horizonDays": 60,
+    "bufferAfterMinutes": 15,
+    "stepMinutes": 15,
+    "holdMinutes": 10,
+    "requestHours": 48,
+    "reminders": [1440, 60]
+  },
+  "types": {
+    "15min": { "name": "Quick chat", "minutes": 15, "locations": ["video"], "description": "A short call to see if we can help." },
+    "30min": { "name": "Call", "minutes": 30, "locations": ["video", "phone"], "dailyCap": 4 },
+    "60min": {
+      "name": "Workshop",
+      "minutes": 60,
+      "locations": ["in-person"],
+      "approval": true,
+      "minNoticeHours": 48,
+      "weekly": { "tue": [["10:00", "16:00"]] }
+    }
+  },
+  "locations": {
+    "video": { "kind": "video", "link": "https://meet.example.com/sam" },
+    "phone": { "kind": "phone", "who": "visitor-gives-number" },
+    "in-person": { "kind": "in-person", "address": "1 Example Street, London" }
+  },
+  "questions": { "phone": "optional", "notes": "optional" },
+  "visitorEmail": "none",
+  "noJs": true
+}
